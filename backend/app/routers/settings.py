@@ -3,109 +3,67 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from app.auth import get_current_active_user
 from app.models import User
+from app.database import get_db
 import os
 import re
+import base64
 
 router = APIRouter()
 
-class OneDriveConfig(BaseModel):
-    microsoft_client_id: str
-    microsoft_client_secret: str
-    microsoft_tenant_id: str
-    onedrive_root_folder: str = "UVA_Research_Assistant"
+class GoogleDriveConfig(BaseModel):
+    google_drive_credentials_json: str
+    google_drive_root_folder: str = "UVA_Research_Assistant"
 
 class EmbeddingConfig(BaseModel):
     provider: str  # "huggingface" or "openai"
 
-@router.post("/onedrive/configure")
-async def configure_onedrive(
-    config: OneDriveConfig,
-    current_user: User = Depends(get_current_active_user)
+# Note: Google Drive OAuth configuration is now handled through the /google-drive/oauth endpoints
+# The old service account configuration endpoint has been removed in favor of OAuth 2.0
+
+@router.get("/google-drive/status")
+async def get_google_drive_status(
+    current_user: User = Depends(get_current_active_user),
+    db = Depends(get_db)
 ):
-    """
-    Configure OneDrive integration by updating .env file
-    Only admin users can modify system configuration
-    """
-    if not current_user.is_admin:
-        raise HTTPException(
-            status_code=403,
-            detail="Only administrators can configure OneDrive integration"
-        )
+    """Check if user has connected their Google Drive via OAuth"""
+    from app.config import settings
+    from app.models import GoogleDriveToken
+    from sqlalchemy.orm import Session
+
+    # Check if OAuth is configured at system level
+    oauth_configured = bool(settings.google_drive_client_id and settings.google_drive_client_secret)
+
+    # Check if user has authorized
+    token = db.query(GoogleDriveToken).filter(
+        GoogleDriveToken.user_id == current_user.id
+    ).first()
+
+    user_connected = bool(token)
+
+    return {
+        "oauth_configured": oauth_configured,
+        "user_connected": user_connected,
+        "root_folder": settings.google_drive_root_folder,
+        "requires_setup": not oauth_configured
+    }
+
+@router.post("/google-drive/test")
+async def test_google_drive_connection(
+    current_user: User = Depends(get_current_active_user),
+    db = Depends(get_db)
+):
+    """Test Google Drive connection with user's OAuth credentials"""
+    from app.mcp_servers.google_drive_mcp import GoogleDriveMCPServer
 
     try:
-        env_path = ".env"
-
-        # Read current .env content
-        if os.path.exists(env_path):
-            with open(env_path, 'r') as f:
-                env_content = f.read()
-        else:
-            raise HTTPException(status_code=500, detail=".env file not found")
-
-        # Update OneDrive configuration values
-        updates = {
-            "MICROSOFT_CLIENT_ID": config.microsoft_client_id,
-            "MICROSOFT_CLIENT_SECRET": config.microsoft_client_secret,
-            "MICROSOFT_TENANT_ID": config.microsoft_tenant_id,
-            "ONEDRIVE_ROOT_FOLDER": config.onedrive_root_folder
-        }
-
-        for key, value in updates.items():
-            # Pattern to match the existing line
-            pattern = rf'^{key}=.*$'
-            replacement = f'{key}={value}'
-
-            # Replace if exists, otherwise append
-            if re.search(pattern, env_content, re.MULTILINE):
-                env_content = re.sub(pattern, replacement, env_content, flags=re.MULTILINE)
-            else:
-                # Add to Microsoft Graph section
-                if "# Microsoft Graph/OneDrive Configuration" in env_content:
-                    section_pattern = r'(# Microsoft Graph/OneDrive Configuration.*?\n)'
-                    env_content = re.sub(
-                        section_pattern,
-                        rf'\1{key}={value}\n',
-                        env_content,
-                        flags=re.DOTALL
-                    )
-
-        # Write updated content
-        with open(env_path, 'w') as f:
-            f.write(env_content)
-
-        return {
-            "message": "OneDrive configuration saved successfully",
-            "note": "Restart the application to apply changes",
-            "configured": True
-        }
-
+        mcp_server = GoogleDriveMCPServer(user_id=current_user.id, db=db)
+        result = await mcp_server.test_connection()
+        return result
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to update configuration: {str(e)}"
+            detail=f"Connection test failed: {str(e)}"
         )
-
-@router.get("/onedrive/status")
-async def get_onedrive_status(
-    current_user: User = Depends(get_current_active_user)
-):
-    """Check if OneDrive is configured"""
-    from app.config import settings
-
-    configured = all([
-        settings.microsoft_client_id,
-        settings.microsoft_client_secret,
-        settings.microsoft_tenant_id,
-        settings.microsoft_client_id != "your_microsoft_client_id"
-    ])
-
-    return {
-        "configured": configured,
-        "root_folder": settings.onedrive_root_folder,
-        "client_id_set": bool(settings.microsoft_client_id and settings.microsoft_client_id != "your_microsoft_client_id"),
-        "secret_set": bool(settings.microsoft_client_secret and settings.microsoft_client_secret != "your_microsoft_client_secret"),
-        "tenant_set": bool(settings.microsoft_tenant_id and settings.microsoft_tenant_id != "your_microsoft_tenant_id")
-    }
 
 @router.post("/embedding/configure")
 async def configure_embedding_provider(
@@ -182,12 +140,9 @@ async def get_system_info(
             "provider": settings.embedding_provider,
             "model": settings.openai_embedding_model if settings.embedding_provider == "openai" else settings.embedding_model
         },
-        "onedrive": {
-            "configured": bool(
-                settings.microsoft_client_id and
-                settings.microsoft_client_id != "your_microsoft_client_id"
-            ),
-            "root_folder": settings.onedrive_root_folder
+        "google_drive": {
+            "configured": bool(settings.google_drive_client_id and settings.google_drive_client_secret),
+            "root_folder": settings.google_drive_root_folder
         },
         "llm": {
             "provider": "anthropic",

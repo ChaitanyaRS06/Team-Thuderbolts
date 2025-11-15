@@ -29,6 +29,8 @@ services:
     volumes:
       - ./backend:/app
       - uploads_data:/app/uploads
+      - ./.env:/app/.env
+      - /Users/chaitanyashahane/Documents/UVA/projects/thunderbolts:/app/storage
     ports:
       - "8000:8000"
     depends_on:

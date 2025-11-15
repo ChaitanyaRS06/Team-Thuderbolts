@@ -39,7 +39,7 @@ class Document(Base):
     document_type = Column(SQLEnum(DocumentType), nullable=False, default=DocumentType.OTHER)
     file_size = Column(Integer)
     status = Column(String, default="uploaded")  # uploaded, processed, embedded, failed
-    onedrive_path = Column(String, nullable=True)  # Path in OneDrive
+    google_drive_id = Column(String, nullable=True)  # Google Drive file ID
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime, nullable=True)
 
@@ -83,8 +83,31 @@ class UVAResource(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String, unique=True, nullable=False)
+    url = Column(String, unique=True, nullable=False)
     title = Column(String, nullable=True)
     content = Column(Text, nullable=True)
     resource_type = Column(String, nullable=True)  # it_guide, policy, faq, etc.
     last_scraped = Column(DateTime, default=datetime.utcnow)
     embedding = Column(Vector(384), nullable=True)
+
+class GoogleDriveToken(Base):
+    __tablename__ = "google_drive_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=True)
+    token_expiry = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class GitHubToken(Base):
+    __tablename__ = "github_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    access_token = Column(Text, nullable=False)
+    token_type = Column(String, default="bearer")
+    scope = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

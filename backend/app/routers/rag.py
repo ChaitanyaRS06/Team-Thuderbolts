@@ -4,13 +4,17 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from app.database import get_db
-from app.models import User, Query
+from app.models import User, Query, GitHubToken
 from app.auth import get_current_active_user
 from app.services.langgraph_workflow import LangGraphAgenticWorkflow
 from app.services.search import SearchService
 from app.services.web_search import TavilySearchService
 from app.services.uva_scraper import UVAResourceScraper
+from app.mcp_servers.github_mcp import GitHubMCPServer
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -48,11 +52,27 @@ async def ask_question(
     web_search_service = TavilySearchService()
     uva_scraper = UVAResourceScraper(db)
 
+    # Initialize GitHub MCP if user has connected GitHub
+    github_mcp = None
+    try:
+        github_token = db.query(GitHubToken).filter(
+            GitHubToken.user_id == current_user.id
+        ).first()
+
+        if github_token:
+            github_mcp = GitHubMCPServer(user_id=current_user.id, db=db)
+            logger.info(f"GitHub MCP initialized for user {current_user.id}")
+        else:
+            logger.info(f"No GitHub connection for user {current_user.id}")
+    except Exception as e:
+        logger.warning(f"Could not initialize GitHub MCP: {e}")
+
     # Create LangGraph workflow
     workflow = LangGraphAgenticWorkflow(
         search_service=search_service,
         web_search_service=web_search_service,
-        uva_scraper=uva_scraper
+        uva_scraper=uva_scraper,
+        github_mcp=github_mcp
     )
 
     try:

@@ -1,12 +1,24 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Settings as SettingsIcon } from 'lucide-react';
-import OneDriveSetup from '../components/OneDriveSetup';
+import GoogleDriveSetup from '../components/GoogleDriveSetup';
+import GitHubSetup from '../components/GitHubSetup';
 import EmbeddingSettings from '../components/EmbeddingSettings';
 
 export default function Settings() {
-  const [currentTab, setCurrentTab] = useState<'onedrive' | 'embedding' | 'system'>('onedrive');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabFromUrl = searchParams.get('tab') as 'google-drive' | 'github' | 'embedding' | 'system' | null;
+  const [currentTab, setCurrentTab] = useState<'google-drive' | 'github' | 'embedding' | 'system'>(
+    tabFromUrl || 'google-drive'
+  );
   const [systemInfo, setSystemInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (tabFromUrl) {
+      setCurrentTab(tabFromUrl);
+    }
+  }, [tabFromUrl]);
 
   useEffect(() => {
     fetchSystemInfo();
@@ -53,14 +65,24 @@ export default function Settings() {
           <div className="border-b border-gray-200">
             <nav className="flex -mb-px">
               <button
-                onClick={() => setCurrentTab('onedrive')}
+                onClick={() => setCurrentTab('google-drive')}
                 className={`py-4 px-6 border-b-2 font-medium text-sm ${
-                  currentTab === 'onedrive'
+                  currentTab === 'google-drive'
                     ? 'border-uva-blue text-uva-blue'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                 }`}
               >
-                OneDrive Integration
+                Google Drive Integration
+              </button>
+              <button
+                onClick={() => setCurrentTab('github')}
+                className={`py-4 px-6 border-b-2 font-medium text-sm ${
+                  currentTab === 'github'
+                    ? 'border-uva-blue text-uva-blue'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                GitHub Integration
               </button>
               <button
                 onClick={() => setCurrentTab('embedding')}
@@ -86,7 +108,8 @@ export default function Settings() {
           </div>
 
           <div className="p-6">
-            {currentTab === 'onedrive' && <OneDriveSetup onConfigured={fetchSystemInfo} />}
+            {currentTab === 'google-drive' && <GoogleDriveSetup onConfigured={fetchSystemInfo} />}
+            {currentTab === 'github' && <GitHubSetup onConfigured={fetchSystemInfo} />}
             {currentTab === 'embedding' && <EmbeddingSettings onConfigured={fetchSystemInfo} />}
             {currentTab === 'system' && systemInfo && (
               <div className="space-y-4">
@@ -100,18 +123,18 @@ export default function Settings() {
                 </div>
 
                 <div className={`border-l-4 p-4 ${
-                  systemInfo.onedrive.configured
+                  systemInfo.google_drive.configured
                     ? 'bg-green-50 border-green-400'
                     : 'bg-yellow-50 border-yellow-400'
                 }`}>
                   <h3 className={`font-medium ${
-                    systemInfo.onedrive.configured ? 'text-green-900' : 'text-yellow-900'
+                    systemInfo.google_drive.configured ? 'text-green-900' : 'text-yellow-900'
                   }`}>
-                    OneDrive Integration
+                    Google Drive Integration
                   </h3>
-                  <p className={systemInfo.onedrive.configured ? 'text-green-700' : 'text-yellow-700'}>
-                    Status: {systemInfo.onedrive.configured ? 'Configured' : 'Not Configured'}
-                    {systemInfo.onedrive.configured && ` - Root Folder: ${systemInfo.onedrive.root_folder}`}
+                  <p className={systemInfo.google_drive.configured ? 'text-green-700' : 'text-yellow-700'}>
+                    Status: {systemInfo.google_drive.configured ? 'Configured' : 'Not Configured'}
+                    {systemInfo.google_drive.configured && ` - Root Folder: ${systemInfo.google_drive.root_folder}`}
                   </p>
                 </div>
 

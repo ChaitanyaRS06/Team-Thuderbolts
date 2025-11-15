@@ -62,8 +62,10 @@ export default function OneDriveSetup({ onConfigured }: OneDriveSetupProps) {
   const [expandedStep, setExpandedStep] = useState<number | null>(0);
   const [status, setStatus] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [testResult, setTestResult] = useState<any>(null);
 
   const [formData, setFormData] = useState({
     microsoft_client_id: '',
@@ -133,6 +135,35 @@ export default function OneDriveSetup({ onConfigured }: OneDriveSetupProps) {
       setError('Network error: ' + (error as Error).message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    setError('');
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:8000/settings/onedrive/test', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      const data = await response.json();
+      setTestResult(data);
+
+      if (data.success) {
+        setSuccess('Connection test successful! ' + data.message);
+      } else {
+        setError('Connection test failed: ' + data.error);
+      }
+    } catch (error) {
+      setError('Connection test error: ' + (error as Error).message);
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -344,6 +375,50 @@ export default function OneDriveSetup({ onConfigured }: OneDriveSetupProps) {
             </a>
           </div>
         </form>
+
+        {/* Test Connection Section */}
+        {status?.configured && (
+          <div className="mt-6 pt-6 border-t border-gray-200">
+            <h3 className="text-lg font-semibold text-gray-900 mb-3">Test Your Connection</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Verify that your OneDrive configuration is working correctly.
+            </p>
+            <button
+              onClick={handleTestConnection}
+              disabled={testing}
+              className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {testing ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Testing Connection...
+                </>
+              ) : (
+                <>
+                  <CheckCircle className="w-4 h-4 mr-2" />
+                  Test Connection
+                </>
+              )}
+            </button>
+
+            {testResult && testResult.success && (
+              <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-4">
+                <div className="flex">
+                  <CheckCircle className="w-5 h-5 text-green-600 mr-2" />
+                  <div className="text-sm text-green-800">
+                    <strong>Connection Successful!</strong>
+                    {testResult.drive_type && (
+                      <p className="mt-1">Drive Type: {testResult.drive_type}</p>
+                    )}
+                    {testResult.owner && (
+                      <p>Owner: {testResult.owner}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -10,7 +10,8 @@ from app.database import get_db
 from app.models import User, Document, DocumentType
 from app.auth import get_current_active_user
 from app.services.pdf_processing import PDFProcessor
-from app.services.onedrive_service import OneDriveService
+from app.services.google_drive_service import GoogleDriveService
+from app.config import settings
 
 router = APIRouter()
 
@@ -20,7 +21,7 @@ class DocumentResponse(BaseModel):
     document_type: str
     file_size: int
     status: str
-    onedrive_path: str | None
+    google_drive_id: str | None
     uploaded_at: datetime
 
     class Config:
@@ -42,13 +43,19 @@ async def upload_document(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Upload a document (PDF) and optionally sync to OneDrive"""
+    """Upload a document (PDF) and optionally sync to Google Drive"""
     # Validate file type
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
-    # Create upload directory
-    upload_dir = f"uploads/{current_user.id}"
+    # Determine storage path based on configuration
+    if settings.local_storage_path and os.path.exists(settings.local_storage_path):
+        # Use local storage path with document type subdirectory
+        upload_dir = os.path.join(settings.local_storage_path, document_type.value)
+    else:
+        # Fallback to uploads directory (in container)
+        upload_dir = f"uploads/{current_user.id}"
+
     os.makedirs(upload_dir, exist_ok=True)
 
     # Generate unique filename
@@ -77,21 +84,24 @@ async def upload_document(
     db.commit()
     db.refresh(document)
 
-    # Upload to OneDrive (async)
-    try:
-        onedrive_service = OneDriveService()
-        onedrive_path = await onedrive_service.upload_file(
-            file_path=file_path,
-            filename=stored_filename,
-            folder=document_type.value,
-            user_email=current_user.email
-        )
-        document.onedrive_path = onedrive_path
-        db.commit()
-        db.refresh(document)
-    except Exception as e:
-        print(f"OneDrive upload failed: {e}")
-        # Continue even if OneDrive upload fails
+    # Upload to Google Drive only if enabled and user has authorized
+    if settings.enable_google_drive:
+        try:
+            google_drive_service = GoogleDriveService(user_id=current_user.id, db=db)
+            google_drive_id = await google_drive_service.upload_file(
+                file_path=file_path,
+                filename=stored_filename,
+                folder=document_type.value
+            )
+            if google_drive_id:
+                document.google_drive_id = google_drive_id
+                db.commit()
+                db.refresh(document)
+        except Exception as e:
+            print(f"Google Drive upload skipped or failed: {e}")
+            # Continue even if Google Drive upload fails
+    else:
+        print(f"Google Drive disabled - file saved to local storage: {file_path}")
 
     return document
 
@@ -136,7 +146,19 @@ async def delete_document(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Delete file
+    # Delete from Google Drive if it was uploaded there
+    if document.google_drive_id:
+        try:
+            google_drive_service = GoogleDriveService()
+            from app.mcp_servers.google_drive_mcp import GoogleDriveMCPServer
+            mcp_server = GoogleDriveMCPServer()
+            await mcp_server.delete_file(document.google_drive_id)
+            print(f"Deleted from Google Drive: {document.google_drive_id}")
+        except Exception as e:
+            print(f"Google Drive delete failed: {e}")
+            # Continue even if Google Drive delete fails
+
+    # Delete local file
     if os.path.exists(document.file_path):
         os.remove(document.file_path)
 

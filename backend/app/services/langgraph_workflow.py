@@ -37,6 +37,7 @@ class AgenticRAGState(TypedDict):
     local_results: List[Dict]
     web_results: List[Dict]
     uva_results: List[Dict]
+    github_results: List[Dict]
 
     # Processing chain
     messages: Annotated[List, add_messages]
@@ -56,12 +57,14 @@ class LangGraphAgenticWorkflow:
     - Evaluator Agent: Assesses answer quality and completeness
     - Search Agent: Retrieves information from multiple sources
     - UVA Resource Agent: Searches UVA-specific resources
+    - GitHub Agent: Searches code repositories and GitHub resources
     """
 
-    def __init__(self, search_service, web_search_service, uva_scraper=None):
+    def __init__(self, search_service, web_search_service, uva_scraper=None, github_mcp=None):
         self.search_service = search_service
         self.web_search_service = web_search_service
         self.uva_scraper = uva_scraper
+        self.github_mcp = github_mcp
 
         # Initialize Anthropic client
         self.anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -81,6 +84,7 @@ class LangGraphAgenticWorkflow:
         workflow.add_node("analyze_question", self._analyze_question_node)
         workflow.add_node("local_search", self._local_search_node)
         workflow.add_node("uva_search", self._uva_search_node)
+        workflow.add_node("github_search", self._github_search_node)
         workflow.add_node("evaluate_local", self._evaluate_local_node)
         workflow.add_node("web_search", self._web_search_node)
         workflow.add_node("generate_answer", self._generate_answer_node)
@@ -93,7 +97,8 @@ class LangGraphAgenticWorkflow:
         # Add edges
         workflow.add_edge("analyze_question", "local_search")
         workflow.add_edge("local_search", "uva_search")
-        workflow.add_edge("uva_search", "evaluate_local")
+        workflow.add_edge("uva_search", "github_search")
+        workflow.add_edge("github_search", "evaluate_local")
 
         # Conditional routing based on local search results
         workflow.add_conditional_edges(
@@ -219,18 +224,110 @@ Respond in JSON format."""
 
         return state
 
+    async def _github_search_node(self, state: AgenticRAGState) -> Dict:
+        """Agent: Search GitHub repositories and code"""
+        logger.info("[GitHub Search] Searching GitHub repositories...")
+
+        state['github_results'] = []
+
+        if self.github_mcp:
+            try:
+                question_lower = state['question'].lower()
+
+                # Keywords for different GitHub operations
+                repo_list_keywords = ['list', 'show', 'my repo', 'my project', 'what repo', 'which repo', 'my github']
+                code_search_keywords = ['code', 'function', 'class', 'implementation', 'find code', 'search code']
+                github_keywords = ['repository', 'repo', 'github', 'git', 'pull request', 'pr', 'issue', 'commit', 'branch']
+
+                # Check if question is asking to list user's repositories
+                is_repo_list_request = any(keyword in question_lower for keyword in repo_list_keywords)
+                is_code_search_request = any(keyword in question_lower for keyword in code_search_keywords)
+                is_github_related = any(keyword in question_lower for keyword in github_keywords)
+
+                if is_repo_list_request or is_github_related:
+                    # User is asking to list their repositories
+                    try:
+                        logger.info("[GitHub] Listing user's repositories...")
+                        repos = await self.github_mcp.list_repositories(per_page=30)
+
+                        # Add all user's repositories
+                        for repo in repos:
+                            state['github_results'].append({
+                                'type': 'repository',
+                                'title': repo.get('full_name', 'Unknown'),
+                                'content': repo.get('description', 'No description'),
+                                'url': repo.get('html_url', ''),
+                                'language': repo.get('language', 'Unknown'),
+                                'stars': repo.get('stargazers_count', 0),
+                                'private': repo.get('private', False),
+                                'updated_at': repo.get('updated_at', ''),
+                                'relevance_score': 0.9
+                            })
+
+                        logger.info(f"[GitHub] Found {len(state['github_results'])} user repositories")
+
+                    except Exception as e:
+                        logger.error(f"GitHub repository listing failed: {e}")
+
+                elif is_code_search_request:
+                    # User is asking about specific code - search within their repos
+                    try:
+                        logger.info("[GitHub] Searching user's code...")
+                        # First get user's repos to scope the search
+                        repos = await self.github_mcp.list_repositories(per_page=10)
+
+                        # Search in user's repositories
+                        for repo in repos[:5]:  # Search top 5 repos
+                            try:
+                                repo_name = repo.get('full_name', '')
+                                # Try to get README or search files
+                                readme = await self.github_mcp.get_readme(
+                                    owner=repo_name.split('/')[0],
+                                    repo=repo_name.split('/')[1]
+                                )
+                                if readme:
+                                    state['github_results'].append({
+                                        'type': 'repository',
+                                        'title': f"{repo_name} - README",
+                                        'content': readme.get('content', '')[:500],  # First 500 chars
+                                        'url': repo.get('html_url', ''),
+                                        'language': repo.get('language', 'Unknown'),
+                                        'relevance_score': 0.7
+                                    })
+                            except:
+                                pass
+
+                    except Exception as e:
+                        logger.warning(f"GitHub code search failed: {e}")
+
+                if state['github_results']:
+                    state['reasoning_steps'].append({
+                        "node": "github_search",
+                        "stage": "retrieval",
+                        "action": f"Found {len(state['github_results'])} GitHub resources from user's account",
+                        "results_count": len(state['github_results']),
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                else:
+                    logger.info("No GitHub results found for user's repositories")
+
+            except Exception as e:
+                logger.error(f"GitHub search error: {e}")
+
+        return state
+
     async def _evaluate_local_node(self, state: AgenticRAGState) -> Dict:
-        """Agent 4: Evaluate if local + UVA results are sufficient"""
+        """Agent 4: Evaluate if local + UVA + GitHub results are sufficient"""
         logger.info("[Evaluate Local] Assessing information sufficiency...")
 
-        total_results = len(state['local_results']) + len(state['uva_results'])
+        total_results = len(state['local_results']) + len(state['uva_results']) + len(state['github_results'])
 
         if total_results == 0:
             state['needs_more_info'] = True
-            decision = "No local or UVA resources found, will search web"
+            decision = "No local, UVA, or GitHub resources found, will search web"
         elif total_results >= 3:
             avg_score = sum(r.get('similarity_score', r.get('relevance_score', 0))
-                          for r in state['local_results'] + state['uva_results']) / total_results
+                          for r in state['local_results'] + state['uva_results'] + state['github_results']) / total_results
             if avg_score >= 0.5:
                 state['needs_more_info'] = False
                 decision = "Sufficient information from local sources"
@@ -302,6 +399,27 @@ Respond in JSON format."""
                     f"{result['content']}\n"
                     f"URL: {result['url']}\n"
                 )
+
+        # Add GitHub context
+        if state['github_results']:
+            context_parts.append("\n=== GITHUB REPOSITORIES & CODE ===")
+            for idx, result in enumerate(state['github_results'], 1):
+                if result['type'] == 'code':
+                    context_parts.append(
+                        f"\n[GitHub Code {idx}: {result['title']}]\n"
+                        f"Repository: {result['repo']}\n"
+                        f"File: {result['path']}\n"
+                        f"{result['content']}\n"
+                        f"URL: {result['url']}\n"
+                    )
+                else:  # repository
+                    context_parts.append(
+                        f"\n[GitHub Repository {idx}: {result['title']}]\n"
+                        f"Description: {result['content']}\n"
+                        f"Language: {result['language']}\n"
+                        f"Stars: {result['stars']}\n"
+                        f"URL: {result['url']}\n"
+                    )
 
         # Add web context
         if state['web_results']:
@@ -413,6 +531,15 @@ Respond in JSON with: {{"completeness": 0.0-1.0, "accuracy": 0.0-1.0, "clarity":
                 "relevance": result['relevance_score']
             })
 
+        for result in state['github_results']:
+            sources.append({
+                "type": "github",
+                "title": result['title'],
+                "url": result['url'],
+                "github_type": result['type'],
+                "relevance": result['relevance_score']
+            })
+
         for result in state['web_results']:
             sources.append({
                 "type": "web",
@@ -510,6 +637,7 @@ Respond in JSON with: {{"completeness": 0.0-1.0, "accuracy": 0.0-1.0, "clarity":
             "local_results": [],
             "web_results": [],
             "uva_results": [],
+            "github_results": [],
             "messages": [],
             "intermediate_answers": [],
             "reasoning_steps": [],

@@ -84,34 +84,226 @@ class OneDriveMCPServer:
             # Get access token
             token = await self.get_access_token(user_email)
 
-            # Create folder structure if it doesn't exist
-            target_folder = f"{self.root_folder}/{folder}"
+            # Initialize Graph client with access token
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            client = GraphServiceClient(credential)
 
-            # Upload file using Microsoft Graph API
-            # This is simplified - actual implementation would use msgraph-sdk
-            onedrive_path = f"{target_folder}/{filename}"
+            # Ensure folder structure exists
+            folder_path = f"{self.root_folder}/{folder}"
+            await self._ensure_folder_exists(client, folder_path)
 
-            print(f"File would be uploaded to: {onedrive_path}")
-            return onedrive_path
+            # Read file content
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+
+            # Upload file to OneDrive
+            # Using /me/drive/root:/{path}:/content for file upload
+            upload_path = f"/me/drive/root:/{folder_path}/{filename}:/content"
+
+            # For files larger than 4MB, use upload session
+            file_size = os.path.getsize(file_path)
+            if file_size > 4 * 1024 * 1024:  # 4MB
+                print(f"Large file detected ({file_size} bytes), using upload session")
+                # Upload session for large files would be implemented here
+                # For now, we'll use the simple upload
+
+            # Simple upload for smaller files
+            import httpx
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/octet-stream"
+            }
+
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.put(
+                    f"https://graph.microsoft.com/v1.0{upload_path}",
+                    headers=headers,
+                    content=file_content,
+                    timeout=300.0
+                )
+
+                if response.status_code in [200, 201]:
+                    onedrive_path = f"{folder_path}/{filename}"
+                    print(f"File uploaded successfully to: {onedrive_path}")
+                    return onedrive_path
+                else:
+                    raise Exception(f"Upload failed: {response.status_code} - {response.text}")
 
         except Exception as e:
             print(f"OneDrive upload error: {e}")
             raise
 
-    async def download_file(self, onedrive_path: str, local_path: str) -> bool:
+    async def _ensure_folder_exists(self, client, folder_path: str):
+        """Ensure folder structure exists in OneDrive"""
+        try:
+            # Split the path and create folders one by one
+            parts = folder_path.strip('/').split('/')
+            current_path = ""
+
+            for part in parts:
+                parent_path = current_path if current_path else "root"
+                current_path = f"{current_path}/{part}" if current_path else part
+
+                try:
+                    # Try to get the folder
+                    await client.me.drive.root.item_with_path(current_path).get()
+                except:
+                    # Folder doesn't exist, create it
+                    folder_item = DriveItem()
+                    folder_item.name = part
+                    folder_item.folder = Folder()
+
+                    if parent_path == "root":
+                        await client.me.drive.root.children.post(folder_item)
+                    else:
+                        await client.me.drive.root.item_with_path(parent_path).children.post(folder_item)
+
+                    print(f"Created folder: {current_path}")
+        except Exception as e:
+            print(f"Error ensuring folder exists: {e}")
+            # Continue anyway - the upload might still work
+
+    async def download_file(self, onedrive_path: str, local_path: str, user_email: str) -> bool:
         """Download a file from OneDrive"""
-        # Placeholder for actual implementation
-        return True
+        if not self.msal_app:
+            print("Warning: OneDrive not configured")
+            return False
 
-    async def list_files(self, folder_path: str) -> list:
+        try:
+            token = await self.get_access_token(user_email)
+
+            import httpx
+            headers = {"Authorization": f"Bearer {token}"}
+
+            download_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{onedrive_path}:/content"
+
+            async with httpx.AsyncClient() as client:
+                response = await client.get(download_url, headers=headers, timeout=300.0)
+
+                if response.status_code == 200:
+                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                    with open(local_path, 'wb') as f:
+                        f.write(response.content)
+                    print(f"File downloaded successfully to: {local_path}")
+                    return True
+                else:
+                    print(f"Download failed: {response.status_code}")
+                    return False
+
+        except Exception as e:
+            print(f"Error downloading file: {e}")
+            return False
+
+    async def list_files(self, folder_path: str, user_email: str) -> list:
         """List files in a OneDrive folder"""
-        # Placeholder for actual implementation
-        return []
+        if not self.msal_app:
+            return []
 
-    async def delete_file(self, onedrive_path: str) -> bool:
+        try:
+            token = await self.get_access_token(user_email)
+
+            import httpx
+            headers = {"Authorization": f"Bearer {token}"}
+
+            list_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{folder_path}:/children"
+
+            async with httpx.AsyncClient() as client:
+                response = await client.get(list_url, headers=headers, timeout=60.0)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    files = []
+                    for item in data.get('value', []):
+                        files.append({
+                            'name': item.get('name'),
+                            'size': item.get('size'),
+                            'created': item.get('createdDateTime'),
+                            'modified': item.get('lastModifiedDateTime'),
+                            'is_folder': 'folder' in item,
+                            'id': item.get('id')
+                        })
+                    return files
+                else:
+                    print(f"List files failed: {response.status_code}")
+                    return []
+
+        except Exception as e:
+            print(f"Error listing files: {e}")
+            return []
+
+    async def delete_file(self, onedrive_path: str, user_email: str) -> bool:
         """Delete a file from OneDrive"""
-        # Placeholder for actual implementation
-        return True
+        if not self.msal_app:
+            return False
+
+        try:
+            token = await self.get_access_token(user_email)
+
+            import httpx
+            headers = {"Authorization": f"Bearer {token}"}
+
+            delete_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{onedrive_path}"
+
+            async with httpx.AsyncClient() as client:
+                response = await client.delete(delete_url, headers=headers, timeout=60.0)
+
+                if response.status_code in [200, 204]:
+                    print(f"File deleted successfully: {onedrive_path}")
+                    return True
+                else:
+                    print(f"Delete failed: {response.status_code}")
+                    return False
+
+        except Exception as e:
+            print(f"Error deleting file: {e}")
+            return False
+
+    async def test_connection(self, user_email: str) -> Dict[str, Any]:
+        """Test OneDrive connection"""
+        if not self.msal_app:
+            return {
+                "success": False,
+                "error": "OneDrive not configured. Please set Microsoft credentials."
+            }
+
+        try:
+            # Get access token
+            token = await self.get_access_token(user_email)
+
+            # Test by getting user's drive info
+            import httpx
+            headers = {"Authorization": f"Bearer {token}"}
+
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://graph.microsoft.com/v1.0/me/drive",
+                    headers=headers,
+                    timeout=30.0
+                )
+
+                if response.status_code == 200:
+                    drive_info = response.json()
+                    return {
+                        "success": True,
+                        "message": "OneDrive connection successful",
+                        "drive_type": drive_info.get('driveType'),
+                        "owner": drive_info.get('owner', {}).get('user', {}).get('displayName')
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Failed to connect: HTTP {response.status_code}"
+                    }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
     def get_tools(self) -> list:
         """

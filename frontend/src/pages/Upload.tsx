@@ -1,26 +1,41 @@
 import { useState } from 'react';
-import { Upload as UploadIcon, FileText, CheckCircle, AlertCircle } from 'lucide-react';
+import { Upload as UploadIcon, FileText, CheckCircle, AlertCircle, X, Loader } from 'lucide-react';
 import { documentsAPI, embeddingsAPI } from '../lib/api';
 
+interface FileStatus {
+  file: File;
+  status: 'pending' | 'uploading' | 'processing' | 'completed' | 'error';
+  error?: string;
+  documentId?: number;
+}
+
 export default function UploadPage() {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<FileStatus[]>([]);
   const [documentType, setDocumentType] = useState<string>('research_paper');
   const [uploading, setUploading] = useState(false);
-  const [processing, setProcessing] = useState(false);
+  const [currentFileIndex, setCurrentFileIndex] = useState<number>(-1);
   const [success, setSuccess] = useState('');
   const [error, setError] = useState('');
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setSelectedFile(e.target.files[0]);
+    if (e.target.files) {
+      const newFiles = Array.from(e.target.files).map(file => ({
+        file,
+        status: 'pending' as const
+      }));
+      setSelectedFiles(prev => [...prev, ...newFiles]);
       setSuccess('');
       setError('');
     }
   };
 
-  const handleUpload = async () => {
-    if (!selectedFile) {
-      setError('Please select a file');
+  const removeFile = (index: number) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleUploadAll = async () => {
+    if (selectedFiles.length === 0) {
+      setError('Please select at least one file');
       return;
     }
 
@@ -28,30 +43,68 @@ export default function UploadPage() {
     setError('');
     setSuccess('');
 
-    try {
-      // Upload document
-      const doc = await documentsAPI.upload(selectedFile, documentType);
-      setSuccess(`File uploaded successfully! Processing...`);
+    // Process files one by one
+    for (let i = 0; i < selectedFiles.length; i++) {
+      setCurrentFileIndex(i);
+      const fileStatus = selectedFiles[i];
 
-      // Process document
-      setProcessing(true);
-      await documentsAPI.process(doc.id);
+      try {
+        // Update status to uploading
+        setSelectedFiles(prev => {
+          const updated = [...prev];
+          updated[i] = { ...updated[i], status: 'uploading' };
+          return updated;
+        });
 
-      // Generate embeddings
-      await embeddingsAPI.generate(doc.id);
+        // Upload document
+        const doc = await documentsAPI.upload(fileStatus.file, documentType);
 
-      setSuccess(
-        `Success! "${selectedFile.name}" has been uploaded, processed, and is ready for search.`
-      );
-      setSelectedFile(null);
-      // Reset file input
-      const fileInput = document.getElementById('file-input') as HTMLInputElement;
-      if (fileInput) fileInput.value = '';
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Upload failed');
-    } finally {
-      setUploading(false);
-      setProcessing(false);
+        // Update status to processing
+        setSelectedFiles(prev => {
+          const updated = [...prev];
+          updated[i] = { ...updated[i], status: 'processing', documentId: doc.id };
+          return updated;
+        });
+
+        // Process document
+        await documentsAPI.process(doc.id);
+
+        // Generate embeddings
+        await embeddingsAPI.generate(doc.id);
+
+        // Update status to completed
+        setSelectedFiles(prev => {
+          const updated = [...prev];
+          updated[i] = { ...updated[i], status: 'completed' };
+          return updated;
+        });
+
+      } catch (err: any) {
+        // Update status to error
+        setSelectedFiles(prev => {
+          const updated = [...prev];
+          updated[i] = {
+            ...updated[i],
+            status: 'error',
+            error: err.response?.data?.detail || 'Upload failed'
+          };
+          return updated;
+        });
+      }
+    }
+
+    setUploading(false);
+    setCurrentFileIndex(-1);
+
+    // Check if all succeeded
+    const allCompleted = selectedFiles.every(f => f.status === 'completed');
+    const successCount = selectedFiles.filter(f => f.status === 'completed').length;
+    const errorCount = selectedFiles.filter(f => f.status === 'error').length;
+
+    if (allCompleted) {
+      setSuccess(`Successfully uploaded and processed all ${selectedFiles.length} documents!`);
+    } else {
+      setSuccess(`Processed ${successCount} documents successfully. ${errorCount} failed.`);
     }
   };
 
@@ -61,6 +114,36 @@ export default function UploadPage() {
     { value: 'results', label: 'Results', description: 'Experimental results' },
     { value: 'other', label: 'Other', description: 'Other documents' },
   ];
+
+  const getStatusIcon = (status: FileStatus['status']) => {
+    switch (status) {
+      case 'pending':
+        return <FileText className="w-5 h-5 text-gray-400" />;
+      case 'uploading':
+        return <Loader className="w-5 h-5 text-blue-500 animate-spin" />;
+      case 'processing':
+        return <Loader className="w-5 h-5 text-orange-500 animate-spin" />;
+      case 'completed':
+        return <CheckCircle className="w-5 h-5 text-green-500" />;
+      case 'error':
+        return <AlertCircle className="w-5 h-5 text-red-500" />;
+    }
+  };
+
+  const getStatusText = (status: FileStatus['status']) => {
+    switch (status) {
+      case 'pending':
+        return 'Waiting...';
+      case 'uploading':
+        return 'Uploading...';
+      case 'processing':
+        return 'Processing & Indexing...';
+      case 'completed':
+        return 'Completed';
+      case 'error':
+        return 'Failed';
+    }
+  };
 
   return (
     <div className="p-8 max-w-4xl mx-auto">
@@ -96,7 +179,8 @@ export default function UploadPage() {
               <button
                 key={type.value}
                 onClick={() => setDocumentType(type.value)}
-                className={`p-4 rounded-lg border-2 text-left transition-all ${
+                disabled={uploading}
+                className={`p-4 rounded-lg border-2 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                   documentType === type.value
                     ? 'border-uva-orange bg-orange-50'
                     : 'border-gray-200 hover:border-gray-300'
@@ -112,56 +196,102 @@ export default function UploadPage() {
         {/* File Upload */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-3">
-            Select PDF file
+            Select PDF files (multiple allowed)
           </label>
           <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-uva-orange transition-colors">
             <input
               id="file-input"
               type="file"
               accept=".pdf"
+              multiple
               onChange={handleFileChange}
+              disabled={uploading}
               className="hidden"
             />
-            <label htmlFor="file-input" className="cursor-pointer">
+            <label htmlFor="file-input" className={uploading ? 'cursor-not-allowed' : 'cursor-pointer'}>
               <UploadIcon className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              {selectedFile ? (
-                <div className="flex items-center justify-center space-x-2">
-                  <FileText className="w-5 h-5 text-uva-orange" />
-                  <span className="text-gray-900 font-medium">{selectedFile.name}</span>
-                </div>
-              ) : (
-                <>
-                  <p className="text-gray-600 mb-2">
-                    Click to browse or drag and drop
-                  </p>
-                  <p className="text-sm text-gray-500">PDF files only</p>
-                </>
-              )}
+              <p className="text-gray-600 mb-2">
+                Click to browse or drag and drop
+              </p>
+              <p className="text-sm text-gray-500">PDF files only • Multiple files supported</p>
             </label>
           </div>
         </div>
 
+        {/* Selected Files List */}
+        {selectedFiles.length > 0 && (
+          <div className="mt-6">
+            <h3 className="text-sm font-medium text-gray-700 mb-3">
+              Selected Files ({selectedFiles.length})
+            </h3>
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {selectedFiles.map((fileStatus, index) => (
+                <div
+                  key={index}
+                  className={`flex items-center justify-between p-3 rounded-lg border ${
+                    fileStatus.status === 'completed'
+                      ? 'bg-green-50 border-green-200'
+                      : fileStatus.status === 'error'
+                      ? 'bg-red-50 border-red-200'
+                      : 'bg-gray-50 border-gray-200'
+                  }`}
+                >
+                  <div className="flex items-center space-x-3 flex-1 min-w-0">
+                    {getStatusIcon(fileStatus.status)}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">
+                        {fileStatus.file.name}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {getStatusText(fileStatus.status)}
+                        {fileStatus.error && ` - ${fileStatus.error}`}
+                      </p>
+                    </div>
+                  </div>
+                  {!uploading && fileStatus.status === 'pending' && (
+                    <button
+                      onClick={() => removeFile(index)}
+                      className="ml-2 p-1 hover:bg-gray-200 rounded"
+                    >
+                      <X className="w-4 h-4 text-gray-500" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Upload Button */}
         <button
-          onClick={handleUpload}
-          disabled={!selectedFile || uploading || processing}
+          onClick={handleUploadAll}
+          disabled={selectedFiles.length === 0 || uploading}
           className="mt-6 w-full bg-uva-orange hover:bg-orange-600 text-white font-semibold py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {uploading
-            ? 'Uploading...'
-            : processing
-            ? 'Processing and indexing...'
-            : 'Upload and Process'}
+            ? `Processing ${currentFileIndex + 1} of ${selectedFiles.length}...`
+            : `Upload and Process ${selectedFiles.length} ${selectedFiles.length === 1 ? 'File' : 'Files'}`}
         </button>
+
+        {/* Clear All Button */}
+        {selectedFiles.length > 0 && !uploading && (
+          <button
+            onClick={() => setSelectedFiles([])}
+            className="mt-3 w-full bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium py-2 rounded-lg transition-colors"
+          >
+            Clear All
+          </button>
+        )}
 
         {/* Info Box */}
         <div className="mt-6 p-4 bg-blue-50 rounded-lg">
           <h3 className="font-medium text-blue-900 mb-2">What happens after upload?</h3>
           <ul className="text-sm text-blue-800 space-y-1">
-            <li>1. File is uploaded to the server and synced to OneDrive</li>
-            <li>2. Text is extracted from your PDF</li>
+            <li>1. Files are uploaded to local storage one by one</li>
+            <li>2. Text is extracted from each PDF</li>
             <li>3. Content is analyzed and indexed for semantic search</li>
-            <li>4. You can then ask questions about the document!</li>
+            <li>4. Embeddings are generated using HuggingFace (384 dimensions)</li>
+            <li>5. You can then ask questions about the documents!</li>
           </ul>
         </div>
       </div>

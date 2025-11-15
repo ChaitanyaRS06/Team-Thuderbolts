@@ -19,7 +19,8 @@
       "Bash(pip install:*)",
       "Bash(python:*)",
       "Bash(./start.sh)",
-      "Bash(docker-compose stop:*)"
+      "Bash(docker-compose stop:*)",
+      "Bash(docker system:*)"
     ],
     "deny": [],
     "ask": []

@@ -5,6 +5,7 @@ from app.config import settings
 from app.database import engine, Base
 from app.routers import auth, documents, embeddings, search, rag, uva_resources
 from app.routers import settings as settings_router
+from app.routers import google_drive_oauth, github_oauth
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -34,6 +35,8 @@ app.include_router(search.router, prefix="/search", tags=["Search"])
 app.include_router(rag.router, prefix="/rag", tags=["RAG"])
 app.include_router(uva_resources.router, prefix="/uva", tags=["UVA Resources"])
 app.include_router(settings_router.router, prefix="/settings", tags=["Settings"])
+app.include_router(google_drive_oauth.router, prefix="/google-drive", tags=["Google Drive OAuth"])
+app.include_router(github_oauth.router, prefix="/github", tags=["GitHub OAuth"])
 
 @app.get("/")
 async def root():

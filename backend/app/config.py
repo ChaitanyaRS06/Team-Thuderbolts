@@ -24,11 +24,14 @@ class Settings(BaseSettings):
     # Tavily Web Search
     tavily_api_key: str
 
-    # Microsoft Graph/OneDrive Configuration
-    microsoft_client_id: Optional[str] = None
-    microsoft_client_secret: Optional[str] = None
-    microsoft_tenant_id: Optional[str] = None
-    onedrive_root_folder: str = "UVA_Research_Assistant"
+    # Google Drive Configuration (OAuth 2.0)
+    google_drive_client_id: Optional[str] = None
+    google_drive_client_secret: Optional[str] = None
+    google_drive_root_folder: str = "UVA_Research_Assistant"
+
+    # GitHub Configuration (OAuth 2.0)
+    github_client_id: Optional[str] = None
+    github_client_secret: Optional[str] = None
 
     # JWT Authentication
     secret_key: str
@@ -52,6 +55,10 @@ class Settings(BaseSettings):
     # UVA Specific Settings
     uva_base_url: str = "https://virginia.edu"
     uva_it_resources_url: str = "https://its.virginia.edu"
+
+    # Local Storage Settings
+    local_storage_path: str = "/app/storage"
+    enable_google_drive: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

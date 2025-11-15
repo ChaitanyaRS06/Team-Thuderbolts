@@ -2,6 +2,8 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { useState, useEffect } from 'react';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import GoogleDriveCallback from './pages/GoogleDriveCallback';
+import GitHubCallback from './pages/GitHubCallback';
 import { authAPI, User } from './lib/api';
 
 function App() {
@@ -50,6 +52,18 @@ function App() {
           path="/login"
           element={
             user ? <Navigate to="/dashboard" /> : <Login onLogin={handleLogin} />
+          }
+        />
+        <Route
+          path="/settings/google-drive/callback"
+          element={
+            user ? <GoogleDriveCallback /> : <Navigate to="/login" />
+          }
+        />
+        <Route
+          path="/settings/github/callback"
+          element={
+            user ? <GitHubCallback /> : <Navigate to="/login" />
           }
         />
         <Route
