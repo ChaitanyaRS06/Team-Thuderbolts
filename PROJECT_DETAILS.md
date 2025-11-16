@@ -2,7 +2,10 @@
 
 ## 🎯 Project Overview
 
-**UVA AI Research Assistant** is an advanced Retrieval-Augmented Generation (RAG) system specifically designed for University of Virginia researchers. It combines local document processing, web search, GitHub integration, and UVA-specific resource scraping to provide comprehensive research assistance powered by Claude AI.
+**UVA AI Research Assistant** is an advanced Retrieval-Augmented Generation (RAG) system specifically designed for University of Virginia researchers. It combines local document processing, web search, GitHub integration, Google Drive integration, and UVA-specific resource scraping to provide comprehensive research assistance powered by Claude AI.
+
+**Status**: ✅ **Fully Operational** - All integrations active and tested
+**Last Updated**: November 16, 2025
 
 ## 🏗️ System Architecture
 
@@ -118,7 +121,7 @@ The system uses **LangGraph** to orchestrate a multi-agent RAG workflow with spe
 │  NODE 4: GITHUB SEARCH                                               │
 │  ───────────────────────                                             │
 │  • Detect GitHub-related keywords (repo, code, github, etc.)        │
-│  • List user's repositories (if connected)                           │
+│  • List user's repositories (if connected via OAuth)                 │
 │  • Search code within user's repos                                   │
 │  • Get README files and metadata                                     │
 │  • Agent: GitHub MCP Agent (GitHub API)                              │
@@ -126,9 +129,20 @@ The system uses **LangGraph** to orchestrate a multi-agent RAG workflow with spe
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  NODE 5: EVALUATE LOCAL SOURCES                                      │
+│  NODE 5: GOOGLE DRIVE SEARCH                                         │
+│  ──────────────────────────────                                      │
+│  • Detect Drive-related keywords (drive, files, documents, etc.)    │
+│  • List user's Google Drive files (if connected via OAuth)          │
+│  • Get file metadata (name, type, modified date, size)              │
+│  • Retrieve file links and permissions                               │
+│  • Agent: Google Drive MCP Agent (Google Drive API)                  │
+└─────────────────────┬───────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  NODE 6: EVALUATE LOCAL SOURCES                                      │
 │  ────────────────────────────────                                    │
-│  • Count total results from local + UVA + GitHub                     │
+│  • Count total results from local + UVA + GitHub + Google Drive     │
 │  • Calculate average relevance score                                 │
 │  • Decision: Need web search? (Yes if < 3 results or low scores)    │
 │  • Agent: Evaluator Agent (Claude)                                   │
@@ -143,7 +157,7 @@ The system uses **LangGraph** to orchestrate a multi-agent RAG workflow with spe
             │                    │
             │                    ▼
             │          ┌─────────────────────────────────────────────┐
-            │          │  NODE 6: WEB SEARCH (TAVILY)                │
+            │          │  NODE 7: WEB SEARCH (TAVILY)                │
             │          │  ─────────────────────────────               │
             │          │  • Search internet using Tavily API         │
             │          │  • Retrieve top 5 web results               │
@@ -155,12 +169,13 @@ The system uses **LangGraph** to orchestrate a multi-agent RAG workflow with spe
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  NODE 7: GENERATE ANSWER                                             │
+│  NODE 8: GENERATE ANSWER                                             │
 │  ─────────────────────────                                           │
 │  • Compile context from ALL sources:                                 │
 │    - Uploaded documents (with page numbers)                          │
 │    - UVA resources (with URLs)                                       │
-│    - GitHub repositories (with repo names)                           │
+│    - GitHub repositories (with repo names and links)                 │
+│    - Google Drive files (with file names and links)                  │
 │    - Web search results (with URLs)                                  │
 │  • Generate comprehensive answer with citations                      │
 │  • Agent: Generator Agent (Claude)                                   │
@@ -168,7 +183,7 @@ The system uses **LangGraph** to orchestrate a multi-agent RAG workflow with spe
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  NODE 8: EVALUATE ANSWER                                             │
+│  NODE 9: EVALUATE ANSWER                                             │
 │  ─────────────────────────                                           │
 │  • Assess completeness (0-1 scale)                                   │
 │  • Assess accuracy (0-1 scale)                                       │
@@ -193,7 +208,7 @@ The system uses **LangGraph** to orchestrate a multi-agent RAG workflow with spe
                       │
                       ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  NODE 9: SYNTHESIZE FINAL                                            │
+│  NODE 10: SYNTHESIZE FINAL                                           │
 │  ──────────────────────────────                                      │
 │  • Select best answer (latest iteration)                             │
 │  • Compile all sources with metadata:                                │
@@ -240,17 +255,23 @@ The system uses **LangGraph** to orchestrate a multi-agent RAG workflow with spe
    - Fetches README files
    - OAuth 2.0 authenticated
 
-5. **Web Search Agent** (Tavily)
+5. **Google Drive MCP Agent** (Google Drive Integration)
+   - Lists user's Google Drive files
+   - Retrieves file metadata (name, type, size, modified date)
+   - Provides file links and permissions
+   - OAuth 2.0 authenticated
+
+6. **Web Search Agent** (Tavily)
    - Searches internet for additional context
    - Only activated when local sources insufficient
    - Returns top 5 relevant results
 
-6. **Generator Agent** (Answer Creation)
+7. **Generator Agent** (Answer Creation)
    - Uses Claude to synthesize answer
    - Combines all sources
    - Includes proper citations
 
-7. **Evaluator Agent** (Quality Assessment)
+8. **Evaluator Agent** (Quality Assessment)
    - Assesses answer completeness
    - Calculates confidence score
    - Determines if iteration needed
@@ -267,6 +288,7 @@ The workflow maintains a shared state object:
     "web_results": List,      # Tavily search results
     "uva_results": List,      # UVA resource results
     "github_results": List,   # GitHub search results
+    "google_drive_results": List,  # Google Drive search results
     "intermediate_answers": List,  # Answers from each iteration
     "reasoning_steps": List,  # Detailed workflow trace
     "final_answer": str,      # Final synthesized answer
@@ -377,17 +399,83 @@ The GitHub MCP is automatically initialized when:
 ### 5. Google Drive Integration (OAuth 2.0)
 
 #### Status
-Currently **ON HOLD** per user request. System configured but not active.
+✅ **ACTIVE AND OPERATIONAL** - Fully integrated into chatbot workflow
 
-#### Implemented Features (Ready for activation)
-- OAuth 2.0 authentication flow
-- Drive file upload/download
-- Folder organization
-- Token management
-- User-scoped access
+#### Architecture: Model Context Protocol (MCP)
 
-#### Fallback: Local Storage
-- **Active Storage**: `/Users/chaitanyashahane/Documents/UVA/projects/thunderbolts`
+The Google Drive integration uses **MCP (Model Context Protocol)**, a server pattern that provides standardized access to external services.
+
+#### Google Drive MCP Server Features
+
+**Class**: `GoogleDriveMCPServer` (backend/app/mcp_servers/google_drive_mcp.py)
+
+**Capabilities**:
+1. **List Files**
+   - List all files in user's Google Drive
+   - Supports filtering and pagination
+   - Includes metadata (name, type, size, modified date)
+
+2. **Upload File**
+   - Upload documents to Google Drive
+   - Organize in configurable folder structure
+   - Automatic folder creation
+
+3. **Download File**
+   - Retrieve file contents from Drive
+   - Support for various file types
+   - Direct API access
+
+4. **Create Folder**
+   - Organize files in Drive
+   - Hierarchical folder structure
+   - Permission management
+
+5. **Get File Metadata**
+   - Retrieve detailed file information
+   - Access permissions and sharing status
+   - Version history
+
+#### OAuth 2.0 Flow
+
+**Setup** (One-time, admin):
+1. Create Google Cloud Project and enable Drive API
+2. Configure OAuth consent screen
+3. Add test users (while in testing mode)
+4. Configure callback URL: `http://localhost:5174/settings/google-drive/callback`
+5. Add Client ID and Secret to `.env`
+
+**User Flow**:
+1. User clicks "Connect Google Drive" in Settings
+2. Backend generates OAuth URL with state token (CSRF protection)
+3. User redirected to Google authorization page
+4. User grants permissions (scope: `https://www.googleapis.com/auth/drive`)
+5. Google redirects to callback URL with authorization code
+6. Backend exchanges code for access token and refresh token
+7. Tokens stored encrypted in `google_drive_tokens` table
+8. User-specific token used for all Drive API calls
+
+**Security**:
+- State token verification prevents CSRF attacks
+- Tokens encrypted in database
+- User-scoped token access (isolation)
+- OAuth 2.0 standard compliance
+- Automatic token refresh handling
+
+#### Integration with LangGraph
+
+The Google Drive MCP is automatically initialized when:
+- User has connected Google Drive account
+- Question contains Drive-related keywords
+- Workflow reaches Google Drive search node
+
+**Example Queries**:
+- "Can you access my Google Drive?"
+- "List my Google Drive files"
+- "Show my documents in Drive"
+- "What files do I have in Google Drive?"
+
+#### Local Storage Fallback
+- **Fallback Storage**: `/Users/chaitanyashahane/Documents/UVA/projects/thunderbolts`
 - **Docker Mount**: Mapped to `/app/storage/` in container
 - **Structure**:
   ```
@@ -398,6 +486,7 @@ Currently **ON HOLD** per user request. System configured but not active.
   ├── embeddings/
   └── uploads/
   ```
+- **Usage**: Used when Google Drive is not connected or disabled
 
 ### 6. UVA-Specific Resource Scraping
 
@@ -531,7 +620,7 @@ created_at TIMESTAMP DEFAULT NOW()
 updated_at TIMESTAMP DEFAULT NOW()
 ```
 
-#### google_drive_tokens (inactive)
+#### google_drive_tokens
 ```sql
 id SERIAL PRIMARY KEY
 user_id INTEGER REFERENCES users(id) UNIQUE
@@ -574,7 +663,7 @@ GITHUB_CLIENT_ID=Ov23***
 GITHUB_CLIENT_SECRET=0d37***
 ```
 
-#### Google Drive (Inactive)
+#### Google Drive
 ```env
 GOOGLE_DRIVE_CLIENT_ID=***
 GOOGLE_DRIVE_CLIENT_SECRET=***
@@ -617,7 +706,7 @@ ENABLE_DETAILED_REASONING=true
 #### Storage
 ```env
 LOCAL_STORAGE_PATH=/Users/chaitanyashahane/Documents/UVA/projects/thunderbolts
-ENABLE_GOOGLE_DRIVE=false
+ENABLE_GOOGLE_DRIVE=true
 ```
 
 ## 🎨 Frontend Features
@@ -654,15 +743,15 @@ ENABLE_GOOGLE_DRIVE=false
    - Relevance scoring
 
 6. **Settings**
-   - **Google Drive Tab**: OAuth connection (inactive)
-   - **GitHub Tab**: OAuth connection, test, disconnect
+   - **Google Drive Tab**: OAuth connection, status, test
+   - **GitHub Tab**: OAuth connection, status, test, disconnect
    - **Embedding Settings**: Model selection
    - **System Info**: Configuration overview
 
 ### Components
 
-- **GoogleDriveSetup**: OAuth flow UI (inactive)
-- **GitHubSetup**: OAuth flow UI, connection management
+- **GoogleDriveSetup**: OAuth flow UI, connection management, test functionality
+- **GitHubSetup**: OAuth flow UI, connection management, test functionality
 - **EmbeddingSettings**: Model configuration
 - **FileUpload**: Multiple file handling with status tracking
 
@@ -711,8 +800,9 @@ docker-compose down
    - Update callback URL to production domain
    - Create separate production OAuth app
 
-3. **Google Drive** (if activated)
-   - Update callback URL
+3. **Google Drive**
+   - Update callback URL to production domain
+   - Publish OAuth app (exit testing mode)
    - Configure OAuth consent screen for production
    - Add production redirect URIs
 
@@ -835,16 +925,20 @@ docker-compose logs --tail 100 backend
 - **Workflow**: GitHub Search → Generate Answer
 - **Sources**: User's GitHub repositories
 
+### File Management
+- **Query**: "What files do I have in Google Drive?"
+- **Workflow**: Google Drive Search → Generate Answer
+- **Sources**: User's Google Drive files with metadata
+
 ### Comprehensive Research
 - **Query**: "What are the latest developments in quantum computing?"
-- **Workflow**: Local Search → UVA Search → GitHub Search → Web Search → Generate Answer
-- **Sources**: Documents, UVA resources, GitHub repos, web articles
+- **Workflow**: Local Search → UVA Search → GitHub Search → Google Drive Search → Web Search → Generate Answer
+- **Sources**: Documents, UVA resources, GitHub repos, Google Drive files, web articles
 
 ## 🔮 Future Enhancements
 
 ### Planned Features
-1. **Google Drive Activation**: Complete OAuth flow testing
-2. **Multi-modal Support**: Image analysis in documents
+1. **Multi-modal Support**: Image analysis in documents
 3. **Collaborative Features**: Shared workspaces
 4. **Advanced Analytics**: Usage statistics, query insights
 5. **Custom LLM Integration**: Support for more models

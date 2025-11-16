@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Send, Sparkles, BookOpen, Globe, Building2, Loader } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Send, Sparkles, BookOpen, Globe, Building2, Loader, Trash2, MessageSquare } from 'lucide-react';
 import { ragAPI, RAGResponse } from '../lib/api';
 
 interface Message {
@@ -8,19 +8,145 @@ interface Message {
   sources?: RAGResponse['sources'];
   reasoning?: RAGResponse['reasoning_steps'];
   confidence?: number;
+  timestamp?: string;
 }
 
+interface Conversation {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+const STORAGE_KEY = 'chat_conversations';
+const MAX_CONVERSATIONS = 4;
+
 export default function AssistantPage() {
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [selectedModel] = useState('claude-3-5-sonnet-20241022');
   const [showReasoning, setShowReasoning] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+
+  // Load conversations from localStorage on mount
+  useEffect(() => {
+    const loadConversations = () => {
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          const parsed: Conversation[] = JSON.parse(stored);
+          setConversations(parsed);
+
+          // Load the most recent conversation
+          if (parsed.length > 0) {
+            const mostRecent = parsed[0];
+            setCurrentConversationId(mostRecent.id);
+            setMessages(mostRecent.messages);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading conversations:', error);
+      }
+    };
+    loadConversations();
+  }, []);
+
+  // Save conversations to localStorage whenever they change
+  useEffect(() => {
+    if (conversations.length > 0) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
+      } catch (error) {
+        console.error('Error saving conversations:', error);
+      }
+    }
+  }, [conversations]);
+
+  // Update current conversation when messages change
+  useEffect(() => {
+    if (messages.length > 0) {
+      saveCurrentConversation();
+    }
+  }, [messages]);
+
+  const saveCurrentConversation = () => {
+    const conversationTitle = messages.length > 0
+      ? messages[0].content.slice(0, 50) + (messages[0].content.length > 50 ? '...' : '')
+      : 'New Conversation';
+
+    const updatedConversation: Conversation = {
+      id: currentConversationId || generateId(),
+      title: conversationTitle,
+      messages: messages,
+      createdAt: currentConversationId
+        ? conversations.find(c => c.id === currentConversationId)?.createdAt || new Date().toISOString()
+        : new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    setConversations(prev => {
+      // Remove current conversation if it exists
+      const filtered = prev.filter(c => c.id !== updatedConversation.id);
+
+      // Add updated conversation at the beginning
+      const updated = [updatedConversation, ...filtered];
+
+      // Keep only last MAX_CONVERSATIONS
+      return updated.slice(0, MAX_CONVERSATIONS);
+    });
+
+    if (!currentConversationId) {
+      setCurrentConversationId(updatedConversation.id);
+    }
+  };
+
+  const generateId = () => {
+    return `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  };
+
+  const startNewConversation = () => {
+    setMessages([]);
+    setCurrentConversationId(null);
+    setShowHistory(false);
+  };
+
+  const loadConversation = (conversationId: string) => {
+    const conversation = conversations.find(c => c.id === conversationId);
+    if (conversation) {
+      setMessages(conversation.messages);
+      setCurrentConversationId(conversationId);
+      setShowHistory(false);
+    }
+  };
+
+  const deleteConversation = (conversationId: string) => {
+    setConversations(prev => prev.filter(c => c.id !== conversationId));
+    if (currentConversationId === conversationId) {
+      startNewConversation();
+    }
+  };
+
+  const clearAllHistory = () => {
+    if (confirm('Are you sure you want to clear all chat history?')) {
+      setConversations([]);
+      setMessages([]);
+      setCurrentConversationId(null);
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  };
 
   const handleSend = async () => {
     if (!input.trim() || loading) return;
 
-    const userMessage: Message = { role: 'user', content: input };
+    const userMessage: Message = {
+      role: 'user',
+      content: input,
+      timestamp: new Date().toISOString()
+    };
     setMessages((prev) => [...prev, userMessage]);
     setInput('');
     setLoading(true);
@@ -34,6 +160,7 @@ export default function AssistantPage() {
         sources: response.sources,
         reasoning: response.reasoning_steps,
         confidence: response.confidence_score,
+        timestamp: new Date().toISOString()
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -41,6 +168,7 @@ export default function AssistantPage() {
       const errorMessage: Message = {
         role: 'assistant',
         content: 'Sorry, I encountered an error processing your question. Please try again.',
+        timestamp: new Date().toISOString()
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
@@ -62,19 +190,115 @@ export default function AssistantPage() {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">AI Research Assistant</h1>
-            <p className="text-sm text-gray-600">Powered by Claude 3.5 Sonnet • Ask questions about your research documents</p>
+    <div className="h-screen flex bg-gray-50">
+      {/* Sidebar - Chat History */}
+      {showHistory && (
+        <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
+          <div className="p-4 border-b border-gray-200">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">Chat History</h2>
+              <button
+                onClick={() => setShowHistory(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <button
+              onClick={startNewConversation}
+              className="w-full bg-uva-orange text-white px-4 py-2 rounded-lg hover:bg-orange-600 transition-colors"
+            >
+              + New Chat
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            {conversations.length === 0 ? (
+              <p className="text-sm text-gray-500 text-center py-8">No conversations yet</p>
+            ) : (
+              conversations.map((conv) => (
+                <div
+                  key={conv.id}
+                  className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                    conv.id === currentConversationId
+                      ? 'bg-uva-orange/10 border-uva-orange'
+                      : 'bg-white border-gray-200 hover:border-gray-300'
+                  }`}
+                  onClick={() => loadConversation(conv.id)}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">
+                        {conv.title}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {new Date(conv.updatedAt).toLocaleDateString()} • {conv.messages.length} messages
+                      </p>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteConversation(conv.id);
+                      }}
+                      className="text-gray-400 hover:text-red-600 ml-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {conversations.length > 0 && (
+            <div className="p-4 border-t border-gray-200">
+              <button
+                onClick={clearAllHistory}
+                className="w-full text-sm text-red-600 hover:text-red-700 py-2"
+              >
+                Clear All History
+              </button>
+              <p className="text-xs text-gray-500 text-center mt-2">
+                Keeping last {MAX_CONVERSATIONS} conversations
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col">
+        {/* Header */}
+        <div className="bg-white border-b border-gray-200 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <button
+                onClick={() => setShowHistory(!showHistory)}
+                className="text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                <MessageSquare className="w-6 h-6" />
+              </button>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">AI Research Assistant</h1>
+                <p className="text-sm text-gray-600">
+                  Powered by Claude 3.5 Sonnet •
+                  {conversations.length > 0 && ` ${conversations.length}/${MAX_CONVERSATIONS} conversations saved`}
+                </p>
+              </div>
+            </div>
+            {messages.length > 0 && (
+              <button
+                onClick={startNewConversation}
+                className="px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+              >
+                New Chat
+              </button>
+            )}
           </div>
         </div>
-      </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {messages.length === 0 && (
           <div className="text-center py-12">
             <Sparkles className="w-16 h-16 text-uva-orange mx-auto mb-4" />
@@ -204,28 +428,29 @@ export default function AssistantPage() {
             </div>
           </div>
         )}
-      </div>
+        </div>
 
-      {/* Input */}
-      <div className="bg-white border-t border-gray-200 p-4">
-        <div className="max-w-4xl mx-auto flex space-x-4">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Ask a question..."
-            className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-uva-orange focus:border-transparent"
-            disabled={loading}
-          />
-          <button
-            onClick={handleSend}
-            disabled={loading || !input.trim()}
-            className="bg-uva-orange hover:bg-orange-600 text-white px-6 py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-          >
-            <Send className="w-5 h-5" />
-            <span>Send</span>
-          </button>
+        {/* Input */}
+        <div className="bg-white border-t border-gray-200 p-4">
+          <div className="max-w-4xl mx-auto flex space-x-4">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+              placeholder="Ask a question..."
+              className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-uva-orange focus:border-transparent"
+              disabled={loading}
+            />
+            <button
+              onClick={handleSend}
+              disabled={loading || !input.trim()}
+              className="bg-uva-orange hover:bg-orange-600 text-white px-6 py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+            >
+              <Send className="w-5 h-5" />
+              <span>Send</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
