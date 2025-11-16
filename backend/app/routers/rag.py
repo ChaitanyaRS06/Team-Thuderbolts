@@ -4,13 +4,14 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from app.database import get_db
-from app.models import User, Query, GitHubToken
+from app.models import User, Query, GitHubToken, GoogleDriveToken
 from app.auth import get_current_active_user
 from app.services.langgraph_workflow import LangGraphAgenticWorkflow
 from app.services.search import SearchService
 from app.services.web_search import TavilySearchService
 from app.services.uva_scraper import UVAResourceScraper
 from app.mcp_servers.github_mcp import GitHubMCPServer
+from app.mcp_servers.google_drive_mcp import GoogleDriveMCPServer
 import json
 import logging
 
@@ -67,12 +68,28 @@ async def ask_question(
     except Exception as e:
         logger.warning(f"Could not initialize GitHub MCP: {e}")
 
+    # Initialize Google Drive MCP if user has connected Google Drive
+    google_drive_mcp = None
+    try:
+        google_drive_token = db.query(GoogleDriveToken).filter(
+            GoogleDriveToken.user_id == current_user.id
+        ).first()
+
+        if google_drive_token:
+            google_drive_mcp = GoogleDriveMCPServer(user_id=current_user.id, db=db)
+            logger.info(f"Google Drive MCP initialized for user {current_user.id}")
+        else:
+            logger.info(f"No Google Drive connection for user {current_user.id}")
+    except Exception as e:
+        logger.warning(f"Could not initialize Google Drive MCP: {e}")
+
     # Create LangGraph workflow
     workflow = LangGraphAgenticWorkflow(
         search_service=search_service,
         web_search_service=web_search_service,
         uva_scraper=uva_scraper,
-        github_mcp=github_mcp
+        github_mcp=github_mcp,
+        google_drive_mcp=google_drive_mcp
     )
 
     try:

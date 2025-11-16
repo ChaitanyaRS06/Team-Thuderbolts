@@ -38,6 +38,7 @@ class AgenticRAGState(TypedDict):
     web_results: List[Dict]
     uva_results: List[Dict]
     github_results: List[Dict]
+    google_drive_results: List[Dict]
 
     # Processing chain
     messages: Annotated[List, add_messages]
@@ -60,11 +61,12 @@ class LangGraphAgenticWorkflow:
     - GitHub Agent: Searches code repositories and GitHub resources
     """
 
-    def __init__(self, search_service, web_search_service, uva_scraper=None, github_mcp=None):
+    def __init__(self, search_service, web_search_service, uva_scraper=None, github_mcp=None, google_drive_mcp=None):
         self.search_service = search_service
         self.web_search_service = web_search_service
         self.uva_scraper = uva_scraper
         self.github_mcp = github_mcp
+        self.google_drive_mcp = google_drive_mcp
 
         # Initialize Anthropic client
         self.anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -85,6 +87,7 @@ class LangGraphAgenticWorkflow:
         workflow.add_node("local_search", self._local_search_node)
         workflow.add_node("uva_search", self._uva_search_node)
         workflow.add_node("github_search", self._github_search_node)
+        workflow.add_node("google_drive_search", self._google_drive_search_node)
         workflow.add_node("evaluate_local", self._evaluate_local_node)
         workflow.add_node("web_search", self._web_search_node)
         workflow.add_node("generate_answer", self._generate_answer_node)
@@ -98,7 +101,8 @@ class LangGraphAgenticWorkflow:
         workflow.add_edge("analyze_question", "local_search")
         workflow.add_edge("local_search", "uva_search")
         workflow.add_edge("uva_search", "github_search")
-        workflow.add_edge("github_search", "evaluate_local")
+        workflow.add_edge("github_search", "google_drive_search")
+        workflow.add_edge("google_drive_search", "evaluate_local")
 
         # Conditional routing based on local search results
         workflow.add_conditional_edges(
@@ -316,18 +320,73 @@ Respond in JSON format."""
 
         return state
 
+    async def _google_drive_search_node(self, state: AgenticRAGState) -> Dict:
+        """Agent: Search Google Drive for files"""
+        logger.info("[Google Drive Search] Searching Google Drive...")
+
+        state['google_drive_results'] = []
+
+        if self.google_drive_mcp:
+            try:
+                question_lower = state['question'].lower()
+
+                # Keywords for Google Drive operations
+                drive_keywords = ['drive', 'google drive', 'my files', 'my documents', 'file', 'folder', 'document']
+                is_drive_related = any(keyword in question_lower for keyword in drive_keywords)
+
+                if is_drive_related:
+                    # List files from Google Drive
+                    try:
+                        logger.info("[Google Drive] Listing user's files...")
+                        files = await self.google_drive_mcp.list_files(max_results=10)
+
+                        # Add files to results
+                        for file in files:
+                            state['google_drive_results'].append({
+                                'type': 'google_drive_file',
+                                'title': file.get('name', 'Unknown'),
+                                'content': f"File: {file.get('name')} (Type: {file.get('mimeType', 'Unknown')})",
+                                'file_id': file.get('id', ''),
+                                'mime_type': file.get('mimeType', ''),
+                                'web_view_link': file.get('webViewLink', ''),
+                                'modified_time': file.get('modifiedTime', ''),
+                                'size': file.get('size', 0),
+                                'relevance_score': 0.7
+                            })
+
+                        logger.info(f"[Google Drive] Found {len(state['google_drive_results'])} files")
+
+                    except Exception as e:
+                        logger.error(f"Google Drive file listing failed: {e}")
+
+                if state['google_drive_results']:
+                    state['reasoning_steps'].append({
+                        "node": "google_drive_search",
+                        "stage": "retrieval",
+                        "action": f"Found {len(state['google_drive_results'])} Google Drive files from user's account",
+                        "results_count": len(state['google_drive_results']),
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                else:
+                    logger.info("No Google Drive results found for user's files")
+
+            except Exception as e:
+                logger.error(f"Google Drive search error: {e}")
+
+        return state
+
     async def _evaluate_local_node(self, state: AgenticRAGState) -> Dict:
-        """Agent 4: Evaluate if local + UVA + GitHub results are sufficient"""
+        """Agent 4: Evaluate if local + UVA + GitHub + Google Drive results are sufficient"""
         logger.info("[Evaluate Local] Assessing information sufficiency...")
 
-        total_results = len(state['local_results']) + len(state['uva_results']) + len(state['github_results'])
+        total_results = len(state['local_results']) + len(state['uva_results']) + len(state['github_results']) + len(state['google_drive_results'])
 
         if total_results == 0:
             state['needs_more_info'] = True
-            decision = "No local, UVA, or GitHub resources found, will search web"
+            decision = "No local, UVA, GitHub, or Google Drive resources found, will search web"
         elif total_results >= 3:
             avg_score = sum(r.get('similarity_score', r.get('relevance_score', 0))
-                          for r in state['local_results'] + state['uva_results'] + state['github_results']) / total_results
+                          for r in state['local_results'] + state['uva_results'] + state['github_results'] + state['google_drive_results']) / total_results
             if avg_score >= 0.5:
                 state['needs_more_info'] = False
                 decision = "Sufficient information from local sources"
@@ -420,6 +479,17 @@ Respond in JSON format."""
                         f"Stars: {result['stars']}\n"
                         f"URL: {result['url']}\n"
                     )
+
+        # Add Google Drive context
+        if state['google_drive_results']:
+            context_parts.append("\n=== GOOGLE DRIVE FILES ===")
+            for idx, result in enumerate(state['google_drive_results'], 1):
+                context_parts.append(
+                    f"\n[Google Drive File {idx}: {result['title']}]\n"
+                    f"Type: {result['mime_type']}\n"
+                    f"Modified: {result['modified_time']}\n"
+                    f"Link: {result['web_view_link']}\n"
+                )
 
         # Add web context
         if state['web_results']:
@@ -540,6 +610,16 @@ Respond in JSON with: {{"completeness": 0.0-1.0, "accuracy": 0.0-1.0, "clarity":
                 "relevance": result['relevance_score']
             })
 
+        for result in state['google_drive_results']:
+            sources.append({
+                "type": "google_drive",
+                "title": result['title'],
+                "url": result['web_view_link'],
+                "file_id": result['file_id'],
+                "mime_type": result['mime_type'],
+                "relevance": result['relevance_score']
+            })
+
         for result in state['web_results']:
             sources.append({
                 "type": "web",
@@ -638,6 +718,7 @@ Respond in JSON with: {{"completeness": 0.0-1.0, "accuracy": 0.0-1.0, "clarity":
             "web_results": [],
             "uva_results": [],
             "github_results": [],
+            "google_drive_results": [],
             "messages": [],
             "intermediate_answers": [],
             "reasoning_steps": [],
